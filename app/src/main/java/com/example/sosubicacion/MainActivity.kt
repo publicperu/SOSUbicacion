@@ -2,8 +2,10 @@ package com.example.sosubicacion
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.location.Location
 import android.location.LocationManager
 import android.os.Build
@@ -13,20 +15,34 @@ import android.os.Handler
 import android.os.Looper
 import android.telephony.SmsManager
 import android.view.Gravity
-import android.widget.Button
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.widget.FrameLayout
+import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.google.android.gms.common.api.ResolvableApiException
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.LocationSettingsRequest
+import com.google.android.gms.location.Priority
 
 class MainActivity : Activity() {
 
     // Número de emergencia con código de país (+51 = Perú)
-    private val emergencyNumber = "+51989957003"
+    private val emergencyNumber = "+51970871809"
     private val alertText =
         "🚨 Auxilio. Me encuentro en esta ubicación y necesito ayuda urgente. " +
                 "Por favor, contacten conmigo de inmediato."
 
+    private val REQ_GPS = 2001
     private lateinit var status: TextView
-    private lateinit var sosButton: Button
+    private lateinit var sosButton: ImageButton
+
+    private var gpsCallback: ((Boolean) -> Unit)? = null
+    private var askedOnStart = false
+    private var pendingSend = false
 
     private val perms = arrayOf(
         Manifest.permission.SEND_SMS,
@@ -38,45 +54,84 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         val dp = resources.displayMetrics.density
 
-        val root = LinearLayout(this).apply {
+        fun pill(tv: TextView) {
+            tv.setTextColor(Color.parseColor("#222222"))
+            tv.gravity = Gravity.CENTER
+            tv.setPadding((16 * dp).toInt(), (10 * dp).toInt(), (16 * dp).toInt(), (10 * dp).toInt())
+            tv.background = GradientDrawable().apply {
+                setColor(Color.parseColor("#D9FFFFFF"))
+                cornerRadius = 20 * dp
+            }
+        }
+
+        val frame = FrameLayout(this)
+
+        // Fondo
+        frame.addView(ImageView(this).apply {
+            setImageResource(R.drawable.fondo)
+            scaleType = ImageView.ScaleType.CENTER_CROP
+        }, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+
+        val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding((24 * dp).toInt(), (48 * dp).toInt(), (24 * dp).toInt(), (24 * dp).toInt())
-        }
-
-        root.addView(TextView(this).apply {
-            text = "Alerta por SMS a $emergencyNumber"
-            textSize = 16f
             gravity = Gravity.CENTER
-        })
-
-        sosButton = Button(this).apply {
-            text = "SOS"
-            textSize = 48f
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#D32F2F"))
-            setOnClickListener { onSosPressed() }
+            setPadding((24 * dp).toInt(), (24 * dp).toInt(), (24 * dp).toInt(), (24 * dp).toInt())
         }
-        root.addView(sosButton, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, (260 * dp).toInt()).apply {
-            topMargin = (32 * dp).toInt()
+
+        val title = TextView(this).apply {
+            text = "Alerta SOS por SMS a $emergencyNumber"
+            textSize = 16f
+        }
+        pill(title)
+        content.addView(title, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
+
+        // Botón con el ícono "buscar"
+        sosButton = ImageButton(this).apply {
+            setImageResource(R.drawable.buscar)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            background = null
+            setPadding(0, 0, 0, 0)
+            contentDescription = "Enviar alerta de emergencia con mi ubicación"
+            setOnClickListener {
+                it.animate().scaleX(0.9f).scaleY(0.9f).setDuration(90).withEndAction {
+                    it.animate().scaleX(1f).scaleY(1f).setDuration(90).start()
+                }.start()
+                onSosPressed()
+            }
+        }
+        content.addView(sosButton, LinearLayout.LayoutParams((280 * dp).toInt(), (280 * dp).toInt()).apply {
+            topMargin = (24 * dp).toInt()
+            bottomMargin = (24 * dp).toInt()
         })
 
         status = TextView(this).apply {
+            text = "Toca el botón para enviar tu ubicación"
             textSize = 16f
-            gravity = Gravity.CENTER
-            setPadding(0, (24 * dp).toInt(), 0, 0)
         }
-        root.addView(status)
+        pill(status)
+        content.addView(status, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
 
-        setContentView(root)
+        frame.addView(content, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        setContentView(frame)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Al abrir la app: pedir permisos y activar GPS
+        if (!askedOnStart) {
+            askedOnStart = true
+            if (hasAllPerms()) ensureGps { } else requestPermissions(perms, 1)
+        }
+    }
+
+    private fun hasAllPerms() = perms.all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+
     private fun onSosPressed() {
-        if (perms.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) {
+        if (!hasAllPerms()) {
+            pendingSend = true
             requestPermissions(perms, 1)
         } else {
-            sendSos()
+            startSosFlow()
         }
     }
 
@@ -85,15 +140,69 @@ class MainActivity : Activity() {
         val smsOk = checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
         val locOk = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
                 checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        if (smsOk && locOk) sendSos()
-        else status.text = "Se necesitan los permisos de SMS y ubicación. Actívalos en Ajustes."
+        val wantedSend = pendingSend
+        pendingSend = false
+        if (!smsOk || !locOk) {
+            status.text = "Se necesitan los permisos de SMS y ubicación. Actívalos en Ajustes."
+            return
+        }
+        if (wantedSend) startSosFlow() else ensureGps { }
     }
 
-    private fun sendSos() {
+    /** Activa el GPS: muestra el diálogo del sistema "Activar ubicación" (un solo toque en Aceptar). */
+    private fun ensureGps(cb: (Boolean) -> Unit) {
+        val lm = getSystemService(LOCATION_SERVICE) as LocationManager
+        if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) { cb(true); return }
+
+        val req = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000L).build()
+        val settingsReq = LocationSettingsRequest.Builder()
+            .addLocationRequest(req)
+            .setAlwaysShow(true)
+            .build()
+        LocationServices.getSettingsClient(this).checkLocationSettings(settingsReq)
+            .addOnSuccessListener { cb(true) }
+            .addOnFailureListener { e ->
+                if (e is ResolvableApiException) {
+                    try {
+                        gpsCallback = cb
+                        e.startResolutionForResult(this, REQ_GPS)
+                    } catch (ex: Exception) {
+                        gpsCallback = null
+                        cb(false)
+                    }
+                } else {
+                    cb(false)
+                }
+            }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_GPS) {
+            val cb = gpsCallback
+            gpsCallback = null
+            cb?.invoke(resultCode == RESULT_OK)
+        }
+    }
+
+    private fun setSending(sending: Boolean) {
+        sosButton.isEnabled = !sending
+        sosButton.alpha = if (sending) 0.5f else 1f
+    }
+
+    private fun startSosFlow() {
+        setSending(true)
+        status.text = "Verificando GPS..."
+        ensureGps { gpsOn ->
+            // Aunque el GPS no se active, se envía la alerta igual (emergencia)
+            sendSos(gpsOn)
+        }
+    }
+
+    private fun sendSos(gpsOn: Boolean) {
         status.text = "Obteniendo ubicación..."
-        sosButton.isEnabled = false
         getLocation { loc ->
-            sosButton.isEnabled = true
+            setSending(false)
             val msg = if (loc != null) {
                 alertText + " 📍 https://maps.google.com/?q=${loc.latitude},${loc.longitude}"
             } else {
@@ -104,8 +213,11 @@ class MainActivity : Activity() {
                     getSystemService(SmsManager::class.java)
                 else @Suppress("DEPRECATION") SmsManager.getDefault()
                 sms.sendMultipartTextMessage(emergencyNumber, null, sms.divideMessage(msg), null, null)
-                status.text = if (loc != null) "✔ Alerta enviada a $emergencyNumber"
-                else "⚠ Alerta enviada SIN ubicación (activa el GPS)"
+                status.text = when {
+                    loc != null -> "✔ Alerta enviada a $emergencyNumber"
+                    !gpsOn -> "⚠ Alerta enviada SIN ubicación (GPS desactivado)"
+                    else -> "⚠ Alerta enviada SIN ubicación (no se pudo obtener)"
+                }
             } catch (e: Exception) {
                 status.text = "Error al enviar: ${e.message}"
             }
@@ -126,7 +238,7 @@ class MainActivity : Activity() {
 
         if (Build.VERSION.SDK_INT >= 30) {
             val signal = CancellationSignal()
-            Handler(Looper.getMainLooper()).postDelayed({ signal.cancel() }, 15000)
+            Handler(Looper.getMainLooper()).postDelayed({ signal.cancel() }, 20000)
             lm.getCurrentLocation(providers.first(), signal, mainExecutor) { loc ->
                 done(loc ?: lastKnown())
             }
