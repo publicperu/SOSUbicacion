@@ -12,19 +12,21 @@ import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
 import android.telephony.SmsManager
-import android.text.InputType
 import android.view.Gravity
 import android.widget.Button
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 
 class MainActivity : Activity() {
 
-    private lateinit var phoneInput: EditText
+    // Número de emergencia con código de país (+51 = Perú)
+    private val emergencyNumber = "+51989957003"
+    private val alertText =
+        "🚨 Auxilio. Me encuentro en esta ubicación y necesito ayuda urgente. " +
+                "Por favor, contacten conmigo de inmediato."
+
     private lateinit var status: TextView
     private lateinit var sosButton: Button
-    private val prefs by lazy { getSharedPreferences("sos", MODE_PRIVATE) }
 
     private val perms = arrayOf(
         Manifest.permission.SEND_SMS,
@@ -43,17 +45,10 @@ class MainActivity : Activity() {
         }
 
         root.addView(TextView(this).apply {
-            text = "Número de emergencia"
+            text = "Alerta por SMS a $emergencyNumber"
             textSize = 16f
+            gravity = Gravity.CENTER
         })
-
-        phoneInput = EditText(this).apply {
-            hint = "Ej: +51987654321"
-            inputType = InputType.TYPE_CLASS_PHONE
-            setText(prefs.getString("phone", ""))
-        }
-        root.addView(phoneInput, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
         sosButton = Button(this).apply {
             text = "SOS"
@@ -78,17 +73,10 @@ class MainActivity : Activity() {
     }
 
     private fun onSosPressed() {
-        val phone = phoneInput.text.toString().trim()
-        if (phone.length < 6) {
-            status.text = "Ingresa un número válido."
-            return
-        }
-        prefs.edit().putString("phone", phone).apply()
-
         if (perms.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) {
             requestPermissions(perms, 1)
         } else {
-            sendSos(phone)
+            sendSos()
         }
     }
 
@@ -97,32 +85,27 @@ class MainActivity : Activity() {
         val smsOk = checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
         val locOk = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
                 checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        if (smsOk && locOk) {
-            sendSos(prefs.getString("phone", "") ?: "")
-        } else {
-            status.text = "Se necesitan los permisos de SMS y ubicación. Actívalos en Ajustes."
-        }
+        if (smsOk && locOk) sendSos()
+        else status.text = "Se necesitan los permisos de SMS y ubicación. Actívalos en Ajustes."
     }
 
-    private fun sendSos(phone: String) {
+    private fun sendSos() {
         status.text = "Obteniendo ubicación..."
         sosButton.isEnabled = false
         getLocation { loc ->
             sosButton.isEnabled = true
             val msg = if (loc != null) {
-                "¡EMERGENCIA! Necesito ayuda. Mi ubicación: " +
-                        "https://maps.google.com/?q=${loc.latitude},${loc.longitude}" +
-                        " (precisión ~${loc.accuracy.toInt()} m)"
+                alertText + " 📍 https://maps.google.com/?q=${loc.latitude},${loc.longitude}"
             } else {
-                "¡EMERGENCIA! Necesito ayuda. No pude obtener mi ubicación exacta."
+                alertText + " (No pude obtener mi ubicación exacta)"
             }
             try {
                 val sms = if (Build.VERSION.SDK_INT >= 31)
                     getSystemService(SmsManager::class.java)
                 else @Suppress("DEPRECATION") SmsManager.getDefault()
-                sms.sendMultipartTextMessage(phone, null, sms.divideMessage(msg), null, null)
-                status.text = if (loc != null) "✔ Alerta enviada a $phone"
-                else "⚠ Alerta enviada a $phone SIN ubicación (activa el GPS)"
+                sms.sendMultipartTextMessage(emergencyNumber, null, sms.divideMessage(msg), null, null)
+                status.text = if (loc != null) "✔ Alerta enviada a $emergencyNumber"
+                else "⚠ Alerta enviada SIN ubicación (activa el GPS)"
             } catch (e: Exception) {
                 status.text = "Error al enviar: ${e.message}"
             }
