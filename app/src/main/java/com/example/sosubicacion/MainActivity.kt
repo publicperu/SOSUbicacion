@@ -85,7 +85,7 @@ class MainActivity : Activity() {
         }
 
         val title = TextView(this).apply {
-            text = "Alerta SOS por SMS a Hortifrut Emergencia
+            text = "Alerta SOS por SMS a Hortifrut Emergencia"
             textSize = 16f
         }
         pill(title)
