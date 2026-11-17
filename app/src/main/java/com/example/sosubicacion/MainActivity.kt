@@ -30,8 +30,14 @@ import com.google.android.gms.location.Priority
 
 class MainActivity : Activity() {
 
-    // Número de emergencia con código de país (+51 = Perú)
-    private val emergencyNumber = "+51970871809"
+    // Números de emergencia con código de país (+51 = Perú).
+    // Para agregar o cambiar números, edita esta lista (uno entre comillas, separados por coma).
+    private val allNumbers = listOf(
+        "+51989957003",
+        "+51904321233"   // <-- REEMPLAZA por el segundo número (ej. "+51987654321")
+    )
+    // Solo se usan los que tengan formato de número válido
+    private val emergencyNumbers = allNumbers.filter { it.matches(Regex("^\\+?\\d{6,15}$")) }
     private val alertText =
         "🚨 Auxilio. Me encuentro en esta ubicación y necesito ayuda urgente. " +
                 "Por favor, contacten conmigo de inmediato."
@@ -79,7 +85,7 @@ class MainActivity : Activity() {
         }
 
         val title = TextView(this).apply {
-            text = "Alerta SOS por SMS a $emergencyNumber"
+            text = "Alerta SOS por SMS a Hortifrut Emergencia
             textSize = 16f
         }
         pill(title)
@@ -208,18 +214,24 @@ class MainActivity : Activity() {
             } else {
                 alertText + " (No pude obtener mi ubicación exacta)"
             }
-            try {
-                val sms = if (Build.VERSION.SDK_INT >= 31)
-                    getSystemService(SmsManager::class.java)
-                else @Suppress("DEPRECATION") SmsManager.getDefault()
-                sms.sendMultipartTextMessage(emergencyNumber, null, sms.divideMessage(msg), null, null)
-                status.text = when {
-                    loc != null -> "✔ Alerta enviada a $emergencyNumber"
-                    !gpsOn -> "⚠ Alerta enviada SIN ubicación (GPS desactivado)"
-                    else -> "⚠ Alerta enviada SIN ubicación (no se pudo obtener)"
+            val sms = if (Build.VERSION.SDK_INT >= 31)
+                getSystemService(SmsManager::class.java)
+            else @Suppress("DEPRECATION") SmsManager.getDefault()
+            var ok = 0
+            var lastError = ""
+            for (number in emergencyNumbers) {
+                try {
+                    sms.sendMultipartTextMessage(number, null, sms.divideMessage(msg), null, null)
+                    ok++
+                } catch (e: Exception) {
+                    lastError = e.message ?: ""
                 }
-            } catch (e: Exception) {
-                status.text = "Error al enviar: ${e.message}"
+            }
+            status.text = when {
+                ok == 0 -> "Error al enviar: $lastError"
+                loc != null -> "✔ Alerta enviada a Hortifrut Emergencia"
+                !gpsOn -> "⚠ Enviada a $ok número(s) SIN ubicación (GPS desactivado)"
+                else -> "⚠ Enviada a $ok número(s) SIN ubicación (no se pudo obtener)"
             }
         }
     }
